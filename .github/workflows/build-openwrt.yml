@@ -1,0 +1,114 @@
+
+# reference: https://github.com/P3TERX/Actions-OpenWrt
+
+name: Build OpenWrt
+on:
+  workflow_dispatch:
+      inputs:
+        repo_url:
+          description: 'openwrt repo url'
+          required: true
+          default: 'https://git.openwrt.org/openwrt/openwrt.git'
+          type: string
+        repo_branch:
+          required: true
+          default: 'openwrt-22.03'
+          type: string
+        repo_tag:
+          required: true
+          default: 'v22.03.3'
+          type: string
+        config_file:
+          required: true
+          default: 'op-config/rm2100-wg-zerotier-basic.config'
+          type: string
+
+env:
+  REPO_URL: ${{ inputs.repo_url }}
+  REPO_BRANCH: ${{ inputs.repo_branch }}
+  REPO_TAG: ${{ inputs.repo_tag }}
+  CONFIG_FILE: ${{ inputs.config_file }}
+  UPLOAD_BIN_DIR: false
+  UPLOAD_FIRMWARE: true
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@main
+    - name: Install prerequisites
+      run: |
+        sudo apt update
+        sudo apt install build-essential clang flex g++ gawk gcc-multilib gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget
+        sudo timedatectl set-timezone "$TZ"
+
+    - name: Clone & Checkout
+      run: |
+        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        cd openwrt
+        git checkout $REPO_TAG
+
+    - name: Update & Install feeds
+      working-directory: openwrt
+      run: |
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+      
+    - name: Load make config
+      run: |
+        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
+
+    - name: Show configuration
+      working-directory: openwrt
+      run: ./scripts/diffconfig.sh
+
+    - name: Download package
+      working-directory: openwrt
+      run: |
+        make defconfig
+        make download -j8
+
+    - name: Build
+      id: build
+      working-directory: openwrt
+      run: |
+        echo -e "$(nproc) thread compile"
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        echo "::set-output name=status::success"
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+    - name: Check space usage
+      if: (!cancelled())
+      run: df -hT
+
+    - name: Upload bin directory
+      uses: actions/upload-artifact@main
+      if: steps.build.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true' && !cancelled()
+      with:
+        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: openwrt/bin
+
+    - name: Organize files
+      id: organize
+      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      run: |
+        cd openwrt/bin/targets/*/*
+        rm -rf packages
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "::set-output name=status::success"
+
+    - name: Upload firmware directory
+      uses: actions/upload-artifact@main
+      if: steps.organize.outputs.status == 'success' && !cancelled()
+      with:
+        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}
+
+    - name: Delete workflow runs
+      uses: GitRML/delete-workflow-runs@main
+      with:
+        retain_days: 1
+        keep_minimum_runs: 3
