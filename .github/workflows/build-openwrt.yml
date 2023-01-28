@@ -42,6 +42,9 @@ jobs:
         sudo apt update
         sudo apt install build-essential clang flex g++ gawk gcc-multilib gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev file wget
         sudo timedatectl set-timezone "$TZ"
+    
+    - name: Check space usage
+      run: df -hT
 
     - name: Clone & Checkout
       run: |
@@ -58,10 +61,6 @@ jobs:
     - name: Load make config
       run: |
         [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
-
-    - name: Show configuration
-      working-directory: openwrt
-      run: ./scripts/diffconfig.sh
 
     - name: Download package
       working-directory: openwrt
